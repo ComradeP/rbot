@@ -17,6 +17,12 @@
 require 'set'
 require 'timeout'
 
+begin
+  require 'json'
+rescue LoadError
+  raise LoadError, "JSON library not found, install it using `gem install json` or fetch it from http://rubyforge.org/projects/json/"
+end
+
 # base class for implementing a translation service
 # = Attributes
 # direction:: supported translation directions, a hash where each key is a source
@@ -190,7 +196,6 @@ class GoogleTranslator < Translator
     uk ur uz ug vi cy yi auto]
   def initialize(cache={})
     require "uri"
-    require "json"
     super(Translator::Direction.all_to_all(LANGUAGES), cache)
   end
 
