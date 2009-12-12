@@ -396,7 +396,7 @@ class MarkovPlugin < Plugin
 
   def ignore?(m=nil)
     return false unless m
-    return true if m.address? or m.private?
+    return true if m.private?
     @bot.config['markov.ignore'].each do |mask|
       return true if m.channel.downcase == mask.downcase
       return true if m.source.matches?(mask)
