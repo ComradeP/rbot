@@ -540,7 +540,7 @@ class MarkovPlugin < Plugin
   end
 
   def random_markov(m, message)
-    return unless should_talk
+    return unless (should_talk or m.address?)
 
     words = clean_str(message).split(/\s+/)
     if words.length < 2
