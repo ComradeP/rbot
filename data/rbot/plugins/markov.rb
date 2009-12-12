@@ -28,6 +28,10 @@ class MarkovPlugin < Plugin
     :default => 0.5,
     :validate => Proc.new { |v| v >= 0 },
     :desc => "Time the learning thread spends sleeping after learning a line. If set to zero, learning from files can be very CPU intensive, but also faster.")
+   Config.register Config::IntegerValue.new('markov.delay',
+    :default => true,
+    :validate => Proc.new { |v| v.is_a? Bool },
+    :desc => "Wait short time before contributing to conversation.")
 
   MARKER = :"\r\n"
 
@@ -323,6 +327,8 @@ class MarkovPlugin < Plugin
     topic, subtopic = topic.split
 
     case topic
+    when "delay"
+      "markov delay <on/off> => Turn message delay on/off"
     when "ignore"
       case subtopic
       when "add"
@@ -346,7 +352,7 @@ class MarkovPlugin < Plugin
         "markov chat => try to say something intelligent"
       end
     else
-      "markov plugin: listens to chat to build a markov chain, with which it can (perhaps) attempt to (inanely) contribute to 'discussion'. Sort of.. Will get a *lot* better after listening to a lot of chat. Usage: 'chat' to attempt to say something relevant to the last line of chat, if it can -- help topics: ignore, status, probability, chat, chat about"
+      "markov plugin: listens to chat to build a markov chain, with which it can (perhaps) attempt to (inanely) contribute to 'discussion'. Sort of.. Will get a *lot* better after listening to a lot of chat. Usage: 'chat' to attempt to say something relevant to the last line of chat, if it can -- help topics: ignore, readonly, delay, status, probability, chat, chat about"
     end
   end
 
@@ -445,6 +451,30 @@ class MarkovPlugin < Plugin
     1 + rand(5)
   end
 
+  def set_delay(m, params)
+    case params[:delay]
+    when "on"
+      @bot.config["markov.delay"] = true
+      m.okay
+    when "off"
+      @bot.config["markov.delay"] = false
+      m.okay
+    else
+      m.reply _("Message delay is %{delay}" % { :delay => @bot.config["markov.delay"] ? "on" : "off"})
+    end
+  end
+
+  def reply_delay(m, line)
+     m.replied = true
+    if @bot.config['markov.delay']
+      @bot.timer.add_once(delay) {
+	     m.reply line, :nick => false, :to => :public
+	   }
+	 else
+	   m.reply line, :nick => false, :to => :public
+	 end
+  end
+
   def random_markov(m, message)
     return unless should_talk
 
@@ -455,9 +485,7 @@ class MarkovPlugin < Plugin
     # we do nothing if the line we return is just an initial substring
     # of the line we received
     return if message.index(line) == 0
-    @bot.timer.add_once(delay) {
-      m.reply line, :nick => false, :to => :public
-    }
+    reply_delay m, line
   end
 
   def chat(m, params)
@@ -599,6 +627,8 @@ class MarkovPlugin < Plugin
 end
 
 plugin = MarkovPlugin.new
+plugin.map 'markov delay :delay', :action => "set_delay"
+plugin.map 'markov delay', :action => "set_delay"
 plugin.map 'markov ignore :action :option', :action => "ignore"
 plugin.map 'markov ignore :action', :action => "ignore"
 plugin.map 'markov ignore', :action => "ignore"
