@@ -372,7 +372,7 @@ class MarkovPlugin < Plugin
 
   def clean_str(s)
     str = s.dup
-    str.gsub!(/^\S+[:]/, "")
+    str.gsub!(/^\S+:/, "")
     str.gsub!(/\s{2,}/, ' ') # fix for two or more spaces
     return str.strip
   end
