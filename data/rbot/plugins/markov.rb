@@ -640,10 +640,9 @@ class MarkovPlugin < Plugin
   def learn_line(message)
     # debug "learning #{message.inspect}"
     wordlist = clean_str(message).split(/\s+/).reject do |w|
-      @config['markov.ignore_patterns'].each do |pat|
-        return true if  w =~ Regexp.new(pat.to_s)
-      end
-      return false
+      @config['markov.ignore_patterns'].map do |pat|
+        w =~ Regexp.new(pat.to_s)
+      end.filter{|v| v}.size == 0
     end.map { |w| w.intern }
     return unless wordlist.length >= 2
     word1, word2 = MARKER, MARKER
