@@ -35,6 +35,9 @@ class MarkovPlugin < Plugin
     :default => true,
     :validate => Proc.new { |v| v.is_a? Bool },
     :desc => "Wait short time before contributing to conversation.")
+   Config.register Config::ArrayValue.new('markov.ignore_patterns',
+    :default => [],
+    :desc => "Ignore these word patterns")
 
   MARKER = :"\r\n"
 
@@ -636,7 +639,12 @@ class MarkovPlugin < Plugin
 
   def learn_line(message)
     # debug "learning #{message.inspect}"
-    wordlist = clean_str(message).split(/\s+/).map { |w| w.intern }
+    wordlist = clean_str(message).split(/\s+/).reject do |w|
+      @config['markov.ignore_patterns'].each do |pat|
+        return true if  w =~ Regexp.new(pat.to_s)
+      end
+      return false
+    end.map { |w| w.intern }
     return unless wordlist.length >= 2
     word1, word2 = MARKER, MARKER
     wordlist << MARKER
