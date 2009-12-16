@@ -223,6 +223,7 @@ class MarkovPlugin < Plugin
     @rchains = @registry.sub_registry('v2r')
     @rchains.set_default([])
     @chains_mutex = Mutex.new
+    @rchains_mutex = Mutex.new
 
     @upgrade_queue = Queue.new
     @upgrade_thread = nil
@@ -632,7 +633,8 @@ class MarkovPlugin < Plugin
         hash[word3] += 1
         total += 1
         @chains[k] = [total, hash]
-
+      end
+      @rchains_mutex.synchronize do
         # Reverse
         total = 0
         hash = Hash.new(0)
