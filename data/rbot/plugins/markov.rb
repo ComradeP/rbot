@@ -149,7 +149,7 @@ class MarkovPlugin < Plugin
             next
           else
             # intern after clearing leftover end-of-actions if present
-            sym = w.chomp("\001").intern
+            sym = w.chomp("\001")
           end
         end
         hash[sym] += 1
@@ -560,14 +560,14 @@ class MarkovPlugin < Plugin
 	 else
 		pairs = seq_pairs(words).sort_by { rand }
 		pairs.each do |word1, word2|
-			line = generate_string(word1.intern, word2.intern)
+			line = generate_string(word1, word2)
 			if line and message.index(line) != 0
 				reply_delay m, line
 				return
 			end
 		end
 		words.sort_by { rand }.each do |word|
-			line = generate_string word.first.intern, nil
+			line = generate_string word.first, nil
 			if line and message.index(line) != 0
 				reply_delay m, line
 				return
@@ -658,12 +658,12 @@ class MarkovPlugin < Plugin
       @bot.config['markov.ignore_patterns'].map do |pat|
         w =~ Regexp.new(pat.to_s)
       end.select{|v| v}.size != 0
-    end.map { |w| w.intern }
+    end
     return unless wordlist.length >= 2
     word1, word2 = MARKER, MARKER
     wordlist << MARKER
     wordlist.each do |word3|
-      learn_triplet(word1, word2, word3)
+      learn_triplet(word1, word2, word3.to_sym)
       word1, word2 = word2, word3
     end
   end
