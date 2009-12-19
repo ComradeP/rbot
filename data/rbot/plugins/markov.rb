@@ -289,40 +289,15 @@ class MarkovPlugin < Plugin
     if word2
       output = [word1, word2]
     else
-      output = word1
-
-    if @chains.key? output
-      wordlist = @chains[output]
-      wordlist.last.delete(MARKER)
-    else
-      output.downcase!
+      output = word1.downcase
       keys = []
-      @chains.each_key(output) do |key|
-        if key.downcase.include? output
-          keys << key
-        else
-          break
-        end
-      end
-      if keys.empty?
-        keys = @chains.keys.select { |k| k.downcase.include? output }
-      end
+      keys = @chains.keys.select {|key| key.include? output}
       return nil if keys.empty?
-      while key = keys.delete_one
-        wordlist = @chains[key]
-        wordlist.last.delete(MARKER)
-        unless wordlist.empty?
-          output = key
-          # split using " " so that we can properly catch the marker
-          word1, word2 = output.split(" ").map {|w| w.intern}
-          break
-        end
-      end
+      output = keys[rand(keys.size)].split(" ")
      end
-    end
-
     output = output.split(' ') unless output.is_a? Array
-    while output.length < @bot.config['markov.max_words'] and output.first != MARKER and output.last != MARKER do
+    input = [word1, word2]
+    while output.length < @bot.config['markov.max_words'] and (output.first != MARKER or output.last != MARKER) do
       if output.last != MARKER
         output << pick_word(output[-2], output[-1])
       end
@@ -330,7 +305,12 @@ class MarkovPlugin < Plugin
         output.insert 0, pick_word(output[0], output[1], @rchains)
       end
     end
-	 output.join(" ")
+    output.delete MARKER
+    if output == input
+      nil
+    else
+	   output.join(" ")
+	 end
   end
 
   def help(plugin, topic="")
@@ -554,8 +534,7 @@ class MarkovPlugin < Plugin
     if words.length < 2
       line = generate_string words.first, nil
 
-      if line
-    		return if message.index(line) == 0
+      if line and message.index(line) != 0
     		reply_delay m, line
 			return
 		end
