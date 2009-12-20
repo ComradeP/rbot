@@ -20,14 +20,24 @@ class MarkovPlugin < Plugin
   Config.register Config::ArrayValue.new('markov.ignore',
     :default => [],
     :desc => "Hostmasks and channel names markov should NOT learn from (e.g. idiot*!*@*, #privchan).")
+  Config.register Config::ArrayValue.new('markov.readonly',
+    :default => [],
+    :desc => "Hostmasks and channel names markov should NOT talk to (e.g. idiot*!*@*, #privchan).")
   Config.register Config::IntegerValue.new('markov.max_words',
     :default => 50,
     :validate => Proc.new { |v| (0..100).include? v },
     :desc => "Maximum number of words the bot should put in a sentence")
-  Config.register Config::IntegerValue.new('markov.learn_delay',
+  Config.register Config::FloatValue.new('markov.learn_delay',
     :default => 0.5,
     :validate => Proc.new { |v| v >= 0 },
     :desc => "Time the learning thread spends sleeping after learning a line. If set to zero, learning from files can be very CPU intensive, but also faster.")
+   Config.register Config::IntegerValue.new('markov.delay',
+    :default => true,
+    :validate => Proc.new { |v| v.is_a? Bool },
+    :desc => "Wait short time before contributing to conversation.")
+   Config.register Config::ArrayValue.new('markov.ignore_patterns',
+    :default => [],
+    :desc => "Ignore these word patterns")
 
   MARKER = :"\r\n"
 
@@ -139,7 +149,7 @@ class MarkovPlugin < Plugin
             next
           else
             # intern after clearing leftover end-of-actions if present
-            sym = w.chomp("\001").intern
+            sym = w.chomp("\001")
           end
         end
         hash[sym] += 1
@@ -210,7 +220,8 @@ class MarkovPlugin < Plugin
 
     @chains = @registry.sub_registry('v2')
     @chains.set_default([])
-    @chains_mutex = Mutex.new
+    @rchains = @registry.sub_registry('v2r')
+    @rchains.set_default([])
 
     @upgrade_queue = Queue.new
     @upgrade_thread = nil
@@ -224,6 +235,8 @@ class MarkovPlugin < Plugin
       end
     end
     @learning_thread.priority = -1
+
+    @previous_message = nil
   end
 
   def cleanup
@@ -236,21 +249,25 @@ class MarkovPlugin < Plugin
     end
 
     debug 'closing learning thread'
+    @learning_queue.clear
     @learning_queue.push nil
     @learning_thread.join
     debug 'learning thread closed'
+    @chains.close
+    @rchains.close
+    super
   end
 
-  # if passed a pair, pick a word from the registry using the pair as key.
-  # otherwise, pick a word from an given list
-  def pick_word(word1, word2=MARKER)
-    if word1.kind_of? Array
-      wordlist = word1
-    else
-      k = "#{word1} #{word2}"
-      return MARKER unless @chains.key? k
-      wordlist = @chains[k]
-    end
+  # pick a word from the registry using the pair as key.
+  def pick_word(word1, word2=MARKER, chainz=@chains)
+    k = "#{word1} #{word2}"
+    return MARKER unless chainz.key? k
+    wordlist = chainz[k]
+    pick_word_from_list wordlist
+  end
+
+  # pick a word from weighted hash
+  def pick_word_from_list(wordlist)
     total = wordlist.first
     hash = wordlist.last
     return MARKER if total == 0
@@ -270,59 +287,38 @@ class MarkovPlugin < Plugin
   def generate_string(word1, word2)
     # limit to max of markov.max_words words
     if word2
-      output = "#{word1} #{word2}"
+      output = [word1, word2]
     else
-      output = word1.to_s
-    end
-
-    if @chains.key? output
-      wordlist = @chains[output]
-      wordlist.last.delete(MARKER)
-    else
-      output.downcase!
+      output = word1.downcase
       keys = []
-      @chains.each_key(output) do |key|
-        if key.downcase.include? output
-          keys << key
-        else
-          break
-        end
-      end
-      if keys.empty?
-        keys = @chains.keys.select { |k| k.downcase.include? output }
-      end
+      keys = @chains.keys.select {|key| key.include? output}
       return nil if keys.empty?
-      while key = keys.delete_one
-        wordlist = @chains[key]
-        wordlist.last.delete(MARKER)
-        unless wordlist.empty?
-          output = key
-          # split using / / so that we can properly catch the marker
-          word1, word2 = output.split(/ /).map {|w| w.intern}
-          break
-        end
+      output = keys[rand(keys.size)].split(" ")
+     end
+    output = output.split(' ') unless output.is_a? Array
+    input = [word1, word2]
+    while output.length < @bot.config['markov.max_words'] and (output.first != MARKER or output.last != MARKER) do
+      if output.last != MARKER
+        output << pick_word(output[-2], output[-1])
+      end
+      if output.first != MARKER
+        output.insert 0, pick_word(output[0], output[1], @rchains)
       end
     end
-
-    word3 = pick_word(wordlist)
-    return nil if word3 == MARKER
-
-    output << " #{word3}"
-    word1, word2 = word2, word3
-
-    (@bot.config['markov.max_words'] - 1).times do
-      word3 = pick_word(word1, word2)
-      break if word3 == MARKER
-      output << " #{word3}"
-      word1, word2 = word2, word3
-    end
-    return output
+    output.delete MARKER
+    if output == input
+      nil
+    else
+	   output.join(" ")
+	 end
   end
 
   def help(plugin, topic="")
     topic, subtopic = topic.split
 
     case topic
+    when "delay"
+      "markov delay <on/off> => Turn message delay on/off"
     when "ignore"
       case subtopic
       when "add"
@@ -333,6 +329,17 @@ class MarkovPlugin < Plugin
         "markov ignore remove <hostmask|channel> => unignore a hostmask or channel"
       else
         "ignore hostmasks or channels -- topics: add, remove, list"
+      end
+    when "readonly"
+      case subtopic
+      when "add"
+        "markov readonly add <hostmask|channel> => read-only a hostmask or a channel"
+      when "list"
+        "markov readonly list => show read-only hostmasks and channels"
+      when "remove"
+        "markov readonly remove <hostmask|channel> => unreadonly a hostmask or channel"
+      else
+        "restrict hostmasks or channels to read only -- topics: add, remove, list"
       end
     when "status"
       "markov status => show if markov is enabled, probability and amount of messages in queue for learning"
@@ -346,13 +353,13 @@ class MarkovPlugin < Plugin
         "markov chat => try to say something intelligent"
       end
     else
-      "markov plugin: listens to chat to build a markov chain, with which it can (perhaps) attempt to (inanely) contribute to 'discussion'. Sort of.. Will get a *lot* better after listening to a lot of chat. Usage: 'chat' to attempt to say something relevant to the last line of chat, if it can -- help topics: ignore, status, probability, chat, chat about"
+      "markov plugin: listens to chat to build a markov chain, with which it can (perhaps) attempt to (inanely) contribute to 'discussion'. Sort of.. Will get a *lot* better after listening to a lot of chat. Usage: 'chat' to attempt to say something relevant to the last line of chat, if it can -- help topics: ignore, readonly, delay, status, probability, chat, chat about"
     end
   end
 
   def clean_str(s)
     str = s.dup
-    str.gsub!(/^\S+[:,;]/, "")
+    str.gsub!(/^\S+:/, "")
     str.gsub!(/\s{2,}/, ' ') # fix for two or more spaces
     return str.strip
   end
@@ -376,8 +383,18 @@ class MarkovPlugin < Plugin
 
   def ignore?(m=nil)
     return false unless m
-    return true if m.address? or m.private?
+    return true if m.private?
+    return true if @bot.config["core.address_prefix"].include? m.plainmessage[0..0]
     @bot.config['markov.ignore'].each do |mask|
+      return true if m.channel.downcase == mask.downcase
+      return true if m.source.matches?(mask)
+    end
+    return false
+  end
+
+  def readonly?(m=nil)
+    return false unless m
+    @bot.config['markov.readonly'].each do |mask|
       return true if m.channel.downcase == mask.downcase
       return true if m.source.matches?(mask)
     end
@@ -415,6 +432,37 @@ class MarkovPlugin < Plugin
     end
   end
 
+  def readonly(m, params)
+    action = params[:action]
+    user = params[:option]
+    case action
+    when 'remove'
+      if @bot.config['markov.readonly'].include? user
+        s = @bot.config['markov.readonly']
+        s.delete user
+        @bot.config['markov.readonly'] = s
+        m.reply _("%{u} removed") % { :u => user }
+      else
+        m.reply _("not found in list")
+      end
+    when 'add'
+      if user
+        if @bot.config['markov.readonly'].include?(user)
+          m.reply _("%{u} already in list") % { :u => user }
+        else
+          @bot.config['markov.readonly'] = @bot.config['markov.readonly'].push user
+          m.reply _("%{u} added to markov readonly list") % { :u => user }
+        end
+      else
+        m.reply _("give the name of a person or channel to read only")
+      end
+    when 'list'
+      m.reply _("I'm only reading %{readonly}") % { :readonly => @bot.config['markov.readonly'].join(", ") }
+    else
+      m.reply _("have markov do not answer to input from a hostmask or a channel. usage: markov readonly add <mask or channel>; markov readonly remove <mask or channel>; markov readonly list")
+    end
+  end
+
   def enable(m, params)
     @bot.config['markov.enabled'] = true
     m.okay
@@ -445,19 +493,68 @@ class MarkovPlugin < Plugin
     1 + rand(5)
   end
 
-  def random_markov(m, message)
-    return unless should_talk
+  # Generates all sequence pairs from array
+  # seq_pairs [1,2,3,4] == [ [1,2], [2,3], [3,4]]
+  def seq_pairs(arr)
+    res = []
+    0.upto(arr.size-2) do |i|
+      res << [arr[i], arr[i+1]]
+    end
+    res
+  end
 
-    word1, word2 = clean_str(message).split(/\s+/)
-    return unless word1 and word2
-    line = generate_string(word1.intern, word2.intern)
-    return unless line
-    # we do nothing if the line we return is just an initial substring
-    # of the line we received
-    return if message.index(line) == 0
-    @bot.timer.add_once(delay) {
-      m.reply line, :nick => false, :to => :public
-    }
+  def set_delay(m, params)
+    case params[:delay]
+    when "on"
+      @bot.config["markov.delay"] = true
+      m.okay
+    when "off"
+      @bot.config["markov.delay"] = false
+      m.okay
+    else
+      m.reply _("Message delay is %{delay}" % { :delay => @bot.config["markov.delay"] ? "on" : "off"})
+    end
+  end
+
+  def reply_delay(m, line)
+     m.replied = true
+    if @bot.config['markov.delay']
+      @bot.timer.add_once(delay) {
+	     m.reply line, :nick => false, :to => :public
+	   }
+	 else
+	   m.reply line, :nick => false, :to => :public
+	 end
+  end
+
+  def random_markov(m, message)
+    return unless (should_talk or m.address?)
+
+    words = clean_str(message).split(/\s+/)
+    if words.length < 2
+      line = generate_string words.first, nil
+
+      if line and message.index(line) != 0
+    		reply_delay m, line
+			return
+		end
+	 else
+		pairs = seq_pairs(words).sort_by { rand }
+		pairs.each do |word1, word2|
+			line = generate_string(word1, word2)
+			if line and message.index(line) != 0
+				reply_delay m, line
+				return
+			end
+		end
+		words.sort_by { rand }.each do |word|
+			line = generate_string word.first, nil
+			if line and message.index(line) != 0
+				reply_delay m, line
+				return
+			end
+		end
+    end
   end
 
   def chat(m, params)
@@ -500,34 +597,50 @@ class MarkovPlugin < Plugin
       message = "#{m.sourcenick} #{message}"
     end
 
+    random_markov(m, message) unless readonly? m or m.replied?
     learn message
-    random_markov(m, message) unless m.replied?
   end
+
 
   def learn_triplet(word1, word2, word3)
       k = "#{word1} #{word2}"
-      @chains_mutex.synchronize do
-        total = 0
-        hash = Hash.new(0)
-        if @chains.key? k
-          t2, h2 = @chains[k]
-          total += t2
-          hash.update h2
-        end
-        hash[word3] += 1
-        total += 1
-        @chains[k] = [total, hash]
+      rk = "#{word2} #{word3}"
+      total = 0
+      hash = Hash.new(0)
+      if @chains.key? k
+        t2, h2 = @chains[k]
+        total += t2
+        hash.update h2
       end
+      hash[word3] += 1
+      total += 1
+      @chains[k] = [total, hash]
+      # Reverse
+      total = 0
+      hash = Hash.new(0)
+      if @rchains.key? rk
+        t2, h2 = @rchains[rk]
+        total += t2
+        hash.update h2
+      end
+      hash[word1] += 1
+      total += 1
+      @rchains[rk] = [total, hash]
   end
+
 
   def learn_line(message)
     # debug "learning #{message.inspect}"
-    wordlist = clean_str(message).split(/\s+/).map { |w| w.intern }
+    wordlist = clean_str(message).split(/\s+/).reject do |w|
+      @bot.config['markov.ignore_patterns'].map do |pat|
+        w =~ Regexp.new(pat.to_s)
+      end.select{|v| v}.size != 0
+    end
     return unless wordlist.length >= 2
     word1, word2 = MARKER, MARKER
     wordlist << MARKER
     wordlist.each do |word3|
-      learn_triplet(word1, word2, word3)
+      learn_triplet(word1, word2, word3.to_sym)
       word1, word2 = word2, word3
     end
   end
@@ -596,15 +709,26 @@ class MarkovPlugin < Plugin
 
     m.okay
   end
+
+  def stats(m, params)
+    m.reply "Markov status: chains: #{@chains.length} forward, #{@rchains.length} reverse, queued phrases: #{@learning_queue.size}"
+  end
+
 end
 
 plugin = MarkovPlugin.new
+plugin.map 'markov delay :delay', :action => "set_delay"
+plugin.map 'markov delay', :action => "set_delay"
 plugin.map 'markov ignore :action :option', :action => "ignore"
 plugin.map 'markov ignore :action', :action => "ignore"
 plugin.map 'markov ignore', :action => "ignore"
+plugin.map 'markov readonly :action :option', :action => "readonly"
+plugin.map 'markov readonly :action', :action => "readonly"
+plugin.map 'markov readonly', :action => "readonly"
 plugin.map 'markov enable', :action => "enable"
 plugin.map 'markov disable', :action => "disable"
 plugin.map 'markov status', :action => "status"
+plugin.map 'markov stats', :action => "stats"
 plugin.map 'chat about :seed1 [:seed2]', :action => "chat"
 plugin.map 'chat', :action => "rand_chat"
 plugin.map 'markov probability [:probability]', :action => "probability",
