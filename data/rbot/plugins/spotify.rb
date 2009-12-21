@@ -27,7 +27,7 @@ class SpotifyPlugin < Plugin
     begin
       result = Spotify.search(method, params[:query].to_s)
     rescue
-      m.reply "problems connecting Spotify"
+      m.reply "problems connecting to Spotify"
     end
 
     if result.nil?

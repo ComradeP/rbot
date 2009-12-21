@@ -967,6 +967,9 @@ module Irc
       # This is used by some messages to build lists of users that
       # will be delegated when the ENDOF... message is received
       @tmpusers = []
+
+      # Same as above, just for bans
+      @tmpbans = []
     end
 
     # Clear the server and reset the user
@@ -1180,6 +1183,17 @@ module Irc
           data[:users] = @tmpusers
           handle(:names, data)
           @tmpusers = Array.new
+        when RPL_BANLIST
+          data[:channel] = @server.channel(argv[1])
+          data[:mask] = argv[2]
+          data[:by] = argv[3]
+          data[:at] = argv[4]
+          @tmpbans << data
+        when RPL_ENDOFBANLIST
+          data[:channel] = @server.channel(argv[1])
+          data[:bans] = @tmpbans
+          handle(:banlist, data)
+          @tmpbans = Array.new
         when RPL_LUSERCLIENT
           # ":There are <integer> users and <integer>
           # services on <integer> servers"
@@ -1344,17 +1358,19 @@ module Irc
           data[:channel].url=data[:url].dup
           handle(:channel_url, data)
         when ERR_NOSUCHNICK
-          data[:nick] = argv[1]
-          if user = @server.get_user(data[:nick])
+          data[:target] = argv[1]
+          data[:message] = argv[2]
+          handle(:nosuchtarget, data)
+          if user = @server.get_user(data[:target])
             @server.delete_user(user)
           end
-          handle(:nosuchnick, data)
         when ERR_NOSUCHCHANNEL
-          data[:channel] = argv[1]
-          if channel = @server.get_channel(data[:channel])
+          data[:target] = argv[1]
+          data[:message] = argv[2]
+          handle(:nosuchtarget, data)
+          if channel = @server.get_channel(data[:target])
             @server.delete_channel(channel)
           end
-          handle(:nosuchchannel, data)
         else
           warning "Unknown message #{serverstring.inspect}"
           handle(:unknown, data)
